@@ -2,87 +2,115 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from imblearn.over_sampling import SMOTE
-from scapy.all import *
+from scapy.all import IP, TCP, UDP, Raw # Specific imports
+import logging # For logging SMOTE issues
 
 class DataProcessor:
+    ALL_FEATURE_NAMES = [
+        'packet_size', 'protocol', 'src_port', 'dst_port', 'flags', 
+        'ttl', 'ip_len', 'ip_version', 
+        'tcp_window', 'tcp_flags', 'tcp_seq', 'tcp_ack', 
+        'udp_len', 'payload_entropy'
+    ]
+    # Define which features are numeric and categorical based on ALL_FEATURE_NAMES
+    NUMERIC_FEATURES = [
+        'packet_size', 'src_port', 'dst_port', 'flags', # Assuming 'flags' is a numeric (e.g. int representation of bitmask)
+        'ttl', 'ip_len', 
+        'tcp_window', 'tcp_flags', # Assuming 'tcp_flags' is numeric
+        'tcp_seq', 'tcp_ack', 'udp_len', 'payload_entropy'
+    ]
+    CATEGORICAL_FEATURES = [
+        'protocol', 'ip_version'
+    ]
+
     def __init__(self):
         self.scaler = MinMaxScaler()
-        self.label_encoder = LabelEncoder()
+        self.label_encoders = {col: LabelEncoder() for col in self.CATEGORICAL_FEATURES}
+        # Ensure no feature is in both lists (developer check)
+        assert len(set(self.NUMERIC_FEATURES) & set(self.CATEGORICAL_FEATURES)) == 0
+        # Ensure all features are covered (developer check)
+        assert set(self.NUMERIC_FEATURES) | set(self.CATEGORICAL_FEATURES) == set(self.ALL_FEATURE_NAMES)
         
     def extract_features(self, packet):
-        features = {
-            'packet_size': len(packet),
-            'protocol': packet.proto if 'proto' in packet else 0,
-            'src_port': packet.sport if hasattr(packet, 'sport') else 0,
-            'dst_port': packet.dport if hasattr(packet, 'dport') else 0,
-            'flags': packet.flags if hasattr(packet, 'flags') else 0,
-            'ttl': packet[IP].ttl if IP in packet else 0,
-            'ip_len': packet[IP].len if IP in packet else 0,
-            'ip_version': packet[IP].version if IP in packet else 0
-        }
+        # Initialize all features with a default value (0)
+        features = {key: 0 for key in self.ALL_FEATURE_NAMES}
+
+        features['packet_size'] = len(packet)
+        # Scapy's packet.proto is often an int (e.g., 6 for TCP, 17 for UDP)
+        # It can be used directly or mapped to names if preferred for encoding.
+        # For now, using it as a direct categorical number.
+        if IP in packet: # Check if it's an IP packet first
+            features['protocol'] = packet[IP].proto
+            features['ttl'] = packet[IP].ttl
+            features['ip_len'] = packet[IP].len
+            features['ip_version'] = packet[IP].version
+            features['flags'] = int(packet[IP].flags) # Ensure IP flags are integer
+
+        if hasattr(packet, 'sport'): # More general check for source port
+            features['src_port'] = packet.sport
+        if hasattr(packet, 'dport'): # More general check for destination port
+            features['dst_port'] = packet.dport
         
         # TCP specific features
         if TCP in packet:
-            features.update({
-                'tcp_window': packet[TCP].window,
-                'tcp_flags': packet[TCP].flags,
-                'tcp_seq': packet[TCP].seq,
-                'tcp_ack': packet[TCP].ack
-            })
+            features['tcp_window'] = packet[TCP].window
+            features['tcp_flags'] = int(packet[TCP].flags) # Ensure TCP flags are integer
+            features['tcp_seq'] = packet[TCP].seq
+            features['tcp_ack'] = packet[TCP].ack
         
         # UDP specific features
         if UDP in packet:
-            features.update({
-                'udp_len': packet[UDP].len
-            })
+            features['udp_len'] = packet[UDP].len
             
         # Calculate entropy of payload if present
-        if Raw in packet:
-            payload = str(packet[Raw].load)
+        if Raw in packet and packet[Raw].load:
+            payload = bytes(packet[Raw].load) # Ensure payload is bytes for consistent entropy calc
             features['payload_entropy'] = self.calculate_entropy(payload)
             
         return features
         
-    def calculate_entropy(self, payload):
-        """Calculate Shannon entropy of packet payload"""
-        prob = [float(payload.count(c)) / len(payload) for c in set(payload)]
-        entropy = -sum([p * np.log2(p) for p in prob])
+    def calculate_entropy(self, payload_bytes):
+        """Calculate Shannon entropy of packet payload (bytes)."""
+        if not payload_bytes: # Handle empty payload
+            return 0.0
+        
+        byte_counts = np.bincount(np.frombuffer(payload_bytes, dtype=np.uint8), minlength=256)
+        probabilities = byte_counts[byte_counts > 0] / len(payload_bytes)
+        entropy = -np.sum(probabilities * np.log2(probabilities))
         return entropy
         
     def preprocess_data(self, df):
-        # Fill missing values
+        # Fill missing values (e.g., for packets that are not IP, or don't have TCP/UDP)
+        # This should ideally be handled by the default values in extract_features,
+        # but an explicit fillna can catch any other NaNs.
         df = df.fillna(0)
-        
-        # Identify numeric features
-        numeric_features = [
-            'packet_size', 'src_port', 'dst_port', 'ttl', 'ip_len',
-            'tcp_window', 'tcp_seq', 'tcp_ack', 'udp_len', 'payload_entropy'
-        ]
-        
-        # Remove features that don't exist in the dataframe
-        numeric_features = [f for f in numeric_features if f in df.columns]
+
+        # Ensure all defined columns are present and in correct order
+        df = df.reindex(columns=self.ALL_FEATURE_NAMES, fill_value=0)
         
         # Normalize numeric features
-        if numeric_features:
-            df[numeric_features] = self.scaler.fit_transform(df[numeric_features])
+        # Filter NUMERIC_FEATURES to only those present in df columns to avoid KeyErrors if df is partial
+        # Though reindex should ensure all ALL_FEATURE_NAMES are present.
+        current_numeric_features = [f for f in self.NUMERIC_FEATURES if f in df.columns]
+        if current_numeric_features:
+            df[current_numeric_features] = self.scaler.fit_transform(df[current_numeric_features])
         
         # Encode categorical features
-        categorical_features = ['protocol', 'ip_version']
-        categorical_features = [f for f in categorical_features if f in df.columns]
-        
-        for feature in categorical_features:
-            df[feature] = self.label_encoder.fit_transform(df[feature].astype(str))
-        
-        # Handle class imbalance if this is training data
-        if 'label' in df.columns and len(df) > 1:  # Only apply SMOTE if we have multiple samples
-            try:
-                smote = SMOTE(random_state=42)
-                X = df.drop('label', axis=1)
-                y = df['label']
-                X_resampled, y_resampled = smote.fit_resample(X, y)
-                return pd.concat([X_resampled, y_resampled], axis=1)
-            except Exception as e:
-                logging.warning(f"SMOTE resampling failed: {str(e)}. Proceeding with original data.")
-                return df
+        current_categorical_features = [f for f in self.CATEGORICAL_FEATURES if f in df.columns]
+        for feature in current_categorical_features:
+            df[feature] = self.label_encoders[feature].fit_transform(df[feature].astype(str))
         
         return df
+
+    def apply_smote(self, X_df, y_series):
+        """Applies SMOTE to handle class imbalance."""
+        # Ensure X_df columns are in the canonical order before SMOTE
+        X_df = X_df.reindex(columns=self.ALL_FEATURE_NAMES, fill_value=0)
+        try:
+            smote = SMOTE(random_state=42)
+            X_resampled, y_resampled = smote.fit_resample(X_df, y_series)
+            # SMOTE returns numpy arrays, convert X_resampled back to DataFrame with correct columns
+            return pd.DataFrame(X_resampled, columns=self.ALL_FEATURE_NAMES), y_resampled
+        except Exception as e:
+            logging.warning(f"SMOTE resampling failed: {str(e)}. Proceeding with original data.")
+            return X_df, y_series
