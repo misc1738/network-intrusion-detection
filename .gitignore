@@ -1,0 +1,25 @@
+# Ignore configuration files
+config.ini
+
+# Ignore log files
+logs/
+
+# Ignore model files
+model/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environment directories
+venv/
+env/
+.venv/
+
+# Ignore IDE/editor specific files
+.idea/
+.vscode/
+*.swp
+*.swo
