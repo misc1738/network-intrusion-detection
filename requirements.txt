@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 tensorflow>=2.8.0
 scapy>=2.4.5
 numpy>=1.21.0
@@ -5,4 +6,13 @@ pandas>=1.3.0
 scikit-learn>=0.24.2
 imbalanced-learn>=0.8.1
 logging>=0.5.1.2
+=======
+tensorflow>=2.8.0
+scapy>=2.4.5
+numpy>=1.21.0
+pandas>=1.3.0
+scikit-learn>=0.24.2
+imbalanced-learn>=0.8.1
+logging>=0.5.1.2
+>>>>>>> b565a2a6b0be06d24c15e7b22047cad86b3637b5
 email-validator>=1.1.3
