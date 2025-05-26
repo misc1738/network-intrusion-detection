@@ -22,7 +22,7 @@ ChartJS.register(
     Legend
 );
 
-const TrafficChart = () => {
+const TrafficChart = ({ onNewAlert }) => {
     const [trafficData, setTrafficData] = useState({
         labels: [],
         datasets: [{
@@ -37,14 +37,22 @@ const TrafficChart = () => {
         const ws = new WebSocket('ws://localhost:3000/ws');
 
         ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            setTrafficData(prevData => ({
-                labels: [...prevData.labels, new Date().toLocaleTimeString()].slice(-20),
-                datasets: [{
-                    ...prevData.datasets[0],
-                    data: [...prevData.datasets[0].data, data.packetsPerSecond].slice(-20)
-                }]
-            }));
+            const message = JSON.parse(event.data);
+
+            if (message.type === 'metrics' && message.data) {
+                setTrafficData(prevData => ({
+                    labels: [...prevData.labels, new Date().toLocaleTimeString()].slice(-20),
+                    datasets: [{
+                        ...prevData.datasets[0],
+                        data: [...prevData.datasets[0].data, message.data.packetsPerSecond].slice(-20)
+                    }]
+                }));
+            } else if (message.type === 'alert' && message.data) {
+                console.log('Alert received in TrafficChart:', message.data);
+                if (typeof onNewAlert === 'function') {
+                    onNewAlert(message.data);
+                }
+            }
         };
 
         return () => ws.close();
